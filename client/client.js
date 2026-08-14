@@ -32,7 +32,7 @@ window.__ModuleLoader__.load({
       '.ubar-pop-open{opacity:1;transform:translateX(0);pointer-events:auto;}',
       '.ubar-pop-row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;min-width:0;}',
       '.ubar-pop-k{flex:none;color:var(--dsw-alias-label-secondary);}',
-      '.ubar-pop-v{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);font-weight:500;text-align:right;white-space:nowrap;}',
+      '.ubar-pop-v{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-align:right;white-space:nowrap;}',
       '.ubar-pop-v.ubar-pop-err{color:var(--dsw-alias-state-error-primary);}',
       '.ubar-pop-msg{font-size:12px;line-height:16px;color:var(--dsw-alias-state-error-primary);word-break:break-all;padding-top:4px;border-top:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 60%,transparent);}',
       '.ubar-pop-foot{display:flex;align-items:center;justify-content:flex-end;margin-top:2px;padding-top:8px;border-top:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 60%,transparent);}',
