@@ -7,9 +7,11 @@
 //   balance: status(ok|unavailable|error) / currency / totalBalance / grantedBalance / toppedUpBalance / message
 //
 // 用量口径:tokenUsage 会话投影(与内置统计同源);金额按内置价格表估算(≈,可在本文件
-// 顶部调整);余额调用官方 GET {baseURL}/user/balance,复用 llm-deepseek 配置的同一把 key,
-// 优先 Node fetch、失败回退 subprocess+curl(绕开 Windows 上可能故障的 WSL bash),
-// 进程内缓存 60 秒。
+// 顶部调整);余额调用官方 GET {baseURL}/user/balance,复用 llm-deepseek 配置的同一把 key。
+//
+// 重要:所有服务一律在请求时经 ctx.get 惰性获取,绝不在 apply 时捕获——bundle 行的
+// apply 可能早于 credentials/settings 等服务的注册(启动时序),闭包捕获会把
+// undefined 冻结进插件,导致永久 no-key。
 
 export const name = 'usage-balance'
 
@@ -55,19 +57,18 @@ function balanceEndpoint(baseURL) {
 }
 
 export function apply(ctx) {
-  const sessions = ctx.get('sessions')
-  const projections = ctx.get('sessionProjections')
-  const settings = ctx.get('settings')
-  const credentials = ctx.get('credentials')
-  const subprocess = ctx.get('subprocess')
-  const sandboxPolicy = ctx.get('sandboxPolicy')
-
   let balanceCache = null
   let balanceAt = 0
 
   async function fetchBalance(cwdHint) {
     const now = Date.now()
     if (balanceCache !== null && now - balanceAt < BALANCE_CACHE_MS) return balanceCache
+    // 惰性获取:每次请求都重新读服务,规避 apply 时序问题
+    const settings = ctx.get('settings')
+    const credentials = ctx.get('credentials')
+    const subprocess = ctx.get('subprocess')
+    const sandboxPolicy = ctx.get('sandboxPolicy')
+    const launchEnvironment = ctx.get('launchEnvironment')
 
     let cfg
     try {
@@ -87,6 +88,13 @@ export function apply(ctx) {
     }
     if (key === '' && typeof process !== 'undefined' && typeof process.env[apiKeyEnv] === 'string') {
       key = process.env[apiKeyEnv]
+    }
+    // 与 llm-deepseek 适配器同链的最后回退:启动环境快照(进程 env / 项目 .env / 用户 .env)
+    if (key === '' && launchEnvironment !== undefined && typeof launchEnvironment.get === 'function') {
+      try {
+        const entry = launchEnvironment.get(apiKeyEnv)
+        if (entry !== undefined && typeof entry.value === 'string' && entry.value.length > 0) key = entry.value
+      } catch { /* 忽略 */ }
     }
     if (key === '') return { status: 'unavailable', reason: 'no-key' }
 
@@ -186,6 +194,7 @@ export function apply(ctx) {
       ? session.header.createdAt
       : null
     if (created !== null) out.startedAt = created
+    const projections = ctx.get('sessionProjections') // 惰性获取
     if (projections !== undefined) {
       try {
         const snap = projections.snapshot(session)
@@ -214,6 +223,7 @@ export function apply(ctx) {
     handler: (req, res) => {
       const query = new URL(req.url ?? '/', 'http://dsh.local').searchParams
       const sessionId = query.get('sessionId')
+      const sessions = ctx.get('sessions') // 惰性获取
       const session = (typeof sessionId === 'string' && sessionId !== '' && sessions !== undefined)
         ? sessions.get(sessionId)
         : undefined
