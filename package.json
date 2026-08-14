@@ -1,0 +1,56 @@
+{
+  "name": "dsh-usage-balance",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness 侧边栏用量/余额插件:在设置按钮上方显示简洁「用量/余额」标签行,悬停右侧展开玻璃详情卡(运行时长/Token/估算金额/官方账户余额),滑杆开关控制详情常驻。Sidebar usage/balance plugin: a compact label row above Settings with a glass details card (runtime, tokens, estimated cost, official balance) and a slide-switch pin.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/index.js",
+    "client/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "dshhub": {
+    "schemaVersion": 1,
+    "displayName": "dsh-usage-balance",
+    "summary": "侧边栏用量/余额标签行:悬停右侧玻璃详情卡(运行时长/Token/估算金额/官方余额),滑杆开关固定详情。",
+    "categories": ["用量", "余额", "Web UI", "观测"],
+    "surfaces": ["host", "web"],
+    "capabilities": {
+      "provides": ["route:/dsh-usage-balance/state"]
+    },
+    "compatibility": {
+      "dsh": ">=0.1.0-rc.5",
+      "node": ">=20"
+    },
+    "permissions": {
+      "network": ["https://api.deepseek.com"]
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "usage",
+    "balance",
+    "billing",
+    "sidebar",
+    "cost",
+    "bilingual"
+  ],
+  "license": "MIT"
+}

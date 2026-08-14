@@ -1,0 +1,7 @@
+# dsh-usage-balance 的 bundle 补丁层。
+# 作为 profile 层级应用:挂载宿主半插件,它提供
+#   GET /dsh-usage-balance/state?sessionId=<当前会话>
+# JSON 路由(会话用量快照 + DeepSeek 官方账户余额)。
+- insert:
+    - id: usage-balance
+      name: dsh-usage-balance
