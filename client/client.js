@@ -6,7 +6,7 @@
 //     官方计价金额(按事件时间分层:基础价期|高峰|空闲) / 计价时段 / 官方余额),
 //     零间距 + 220ms 关闭缓冲,视口防溢出自动翻转到左侧并保持 12px 边距;
 //   - 卡底「门帘式」椭圆滑杆开关:深灰门帘从左向右拉满 = 详情常驻;
-//   - 窄栏(rail):¥ 圆形徽标,悬停系统提示看详情;
+//   - 窄栏(rail):¥ 圆形徽标,悬停同样展开详情卡(与宽栏同一套悬停/定位逻辑);
 //   - 与 Cordis 面板共存:精确 :has() 规则把脚部动作区改为纵向堆叠。
 // 数据来自宿主半的 GET /dsh-usage-balance/state 路由,60 秒刷新;样式全部
 // 使用 --dsw-* 主题变量,跟随全局亮/暗主题;文案跟随界面中英文。
@@ -243,13 +243,6 @@ window.__ModuleLoader__.load({
         + ' · ' + t.cacheHit + ' ' + cacheHitText + ' · ' + t.outTok + ' ' + outTokText
         + ' · ' + t.cost + ' ' + costText + ' | ' + t.balance + ' ' + balText
 
-      if (!wide) {
-        return e('div', {
-          className: 'ubar ubar-rail',
-          title: fullTitle,
-        }, (bal && bal.status === 'ok') ? currencySymbol(bal.currency) : '·')
-      }
-
       const rows = []
       rows.push(e('div', { className: 'ubar-pop-row', key: 'runtime' },
         e('span', { className: 'ubar-pop-k' }, t.runtime),
@@ -292,8 +285,7 @@ window.__ModuleLoader__.load({
           e('span', { className: 'ubar-switch-label ubar-switch-on-label' }, t.modePinned)
         )))
 
-      return e('div', {
-        className: pinned ? 'ubar ubar-pinned' : 'ubar',
+      const hoverHandlers = {
         onMouseEnter: (ev) => {
           clearHoverTimer()
           measureFly(ev.currentTarget.getBoundingClientRect())
@@ -310,7 +302,27 @@ window.__ModuleLoader__.load({
             setHovered(false)
           }
         },
-      },
+      }
+      const popNode = e('div', {
+        className: (hovered || pinned) ? 'ubar-pop ubar-pop-open' : 'ubar-pop',
+        style: {
+          top: fly !== null ? fly.top : -9999,
+          left: fly !== null ? fly.left : -9999,
+        },
+      }, rows)
+
+      if (!wide) {
+        return e('div', Object.assign({
+          className: 'ubar ubar-rail',
+          title: (hovered || pinned) ? undefined : fullTitle,
+        }, hoverHandlers),
+          (bal && bal.status === 'ok') ? currencySymbol(bal.currency) : '·',
+          popNode)
+      }
+
+      return e('div', Object.assign({
+        className: pinned ? 'ubar ubar-pinned' : 'ubar',
+      }, hoverHandlers),
         e('svg', {
           className: 'ubar-icon',
           viewBox: '0 0 24 24',
@@ -322,14 +334,7 @@ window.__ModuleLoader__.load({
         e('span', { className: 'ubar-label' }, t.usage),
         e('span', { className: 'ubar-sep' }, '|'),
         e('span', { className: 'ubar-label' }, t.balance),
-        e('div', {
-          className: (hovered || pinned) ? 'ubar-pop ubar-pop-open' : 'ubar-pop',
-          style: {
-            top: fly !== null ? fly.top : -9999,
-            left: fly !== null ? fly.left : -9999,
-          },
-        }, rows)
-      )
+        popNode)
     }
 
     // ── 插件主体 ─────────────────────────────────────────────────────────
