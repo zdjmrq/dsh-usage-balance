@@ -3,7 +3,8 @@
 // 在侧边栏「用量/余额」标签行的背后提供 JSON 状态路由:
 //   GET /dsh-usage-balance/state?sessionId=<当前会话>
 // 返回:
-//   usage:   startedAt / inputTokens / outputTokens / cacheReadTokens /
+//   usage:   startedAt / workMs(每轮实际工作时间之和,空闲不计) / running /
+//            inputTokens / outputTokens / cacheReadTokens /
 //            costCny / costBreakdown(基础价期|高峰|空闲) / currentTier / model
 //   balance: status(ok|unavailable|error) / currency / totalBalance / grantedBalance / toppedUpBalance / message
 //
@@ -65,9 +66,10 @@ function currentTier() {
 }
 
 // ── 会话级增量计价缓存 ────────────────────────────────────────────────
-// sessionId -> { lastSeq, model, last, buckets, cost }
+// sessionId -> { lastSeq, model, last, buckets, cost, turnStart, workMs }
 // 事件日志 append-only 且 seq 连续;每次请求只处理 lastSeq 之后的新事件。
 // 冷启动(或日志 seq 不连续)时从 0 全量重扫一次,毫秒级。
+// workMs = 每轮对话实际工作时间之和(turn/start → turn/end),空闲等待不计。
 const billing = new Map()
 
 function emptyBuckets() {
@@ -98,14 +100,14 @@ function sweepBilling(session, now) {
   const id = session.id
   let b = billing.get(id)
   if (b === undefined) {
-    b = { lastSeq: 0, model: null, last: null, buckets: emptyBuckets(), cost: 0 }
+    b = { lastSeq: 0, model: null, last: null, buckets: emptyBuckets(), cost: 0, turnStart: new Map(), workMs: 0 }
     billing.set(id, b)
   }
   const total = Array.isArray(events) ? events.length : 0
   // 已处理 seq 越过当前日志长度(异常)或首个新事件 seq 不连续 → 全量重扫
   if (b.lastSeq > total || (b.lastSeq > 0 && b.lastSeq <= total
     && (!events[b.lastSeq - 1] || events[b.lastSeq - 1].seq !== b.lastSeq))) {
-    b = { lastSeq: 0, model: null, last: null, buckets: emptyBuckets(), cost: 0 }
+    b = { lastSeq: 0, model: null, last: null, buckets: emptyBuckets(), cost: 0, turnStart: new Map(), workMs: 0 }
     billing.set(id, b)
   }
   if (total === 0) return b
@@ -113,6 +115,21 @@ function sweepBilling(session, now) {
   for (let i = b.lastSeq; i < total; i++) {
     const ev = events[i]
     if (!ev || typeof ev !== 'object') continue
+    const time = typeof ev.time === 'number' ? ev.time : now
+    // 每轮实际工作时间:turn/start 记账,turn/end 累加区间;进行中的轮在
+    // buildUsage 里补算到当前时刻。
+    if (ev.type === 'turn/start' && ev.data && typeof ev.data.turn === 'number') {
+      b.turnStart.set(ev.data.turn, time)
+      continue
+    }
+    if (ev.type === 'turn/end' && ev.data && typeof ev.data.turn === 'number') {
+      const start = b.turnStart.get(ev.data.turn)
+      if (start !== undefined) {
+        b.workMs += Math.max(0, time - start)
+        b.turnStart.delete(ev.data.turn)
+      }
+      continue
+    }
     if (ev.type === 'request/header' && ev.data && ev.data.header && ev.data.header.config) {
       const m = ev.data.header.config.model
       if (typeof m === 'string' && m.length > 0) b.model = m
@@ -132,7 +149,6 @@ function sweepBilling(session, now) {
     }
     if (usage === null || usage === undefined) continue
 
-    const time = typeof ev.time === 'number' ? ev.time : now
     const tier = priceTierAt(time)
     const p = priceFor(b.model, tier)
     const miss = (usage.inputTokens || 0) + (usage.cacheWriteTokens || 0)
@@ -297,6 +313,8 @@ export function apply(ctx) {
     const out = {
       hasSession: session !== undefined,
       startedAt: null,
+      workMs: null,
+      running: false,
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -326,7 +344,7 @@ export function apply(ctx) {
       } catch { /* 投影读取失败时保持 0 */ }
     }
 
-    // 精确金额:增量扫描事件日志,按事件时间分层计价
+    // 精确金额:增量扫描事件日志,按事件时间分层计价;顺带累计每轮实际工作时间
     try {
       const b = sweepBilling(session, now)
       const model = b.model !== null ? b.model : detectModel(session.events)
@@ -337,6 +355,11 @@ export function apply(ctx) {
         peak: b.buckets.peak.amount,
         offpeak: b.buckets.offpeak.amount,
       }
+      // 已完成轮次之和 + 进行中的轮(有 turn/start 尚无 turn/end)补算到当前
+      let work = b.workMs
+      for (const start of b.turnStart.values()) work += Math.max(0, now - start)
+      out.workMs = work
+      out.running = b.turnStart.size > 0
     } catch { /* 计价失败时金额保持 null */ }
 
     return out

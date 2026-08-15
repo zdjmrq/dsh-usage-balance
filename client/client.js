@@ -2,8 +2,9 @@
 //
 // 注册到 sidebar.footer.action(设置按钮上方):
 //   - 宽栏:⏱ 仪表盘图标 +「用量 | 余额」主色 13px 标签行(与设置/Cordis 行同风格);
-//   - 悬停:右侧展开玻璃拟态详情卡(运行时长每秒跳动 / 输入未命中·缓存命中·输出 /
-//     官方计价金额(按事件时间分层:基础价期|高峰|空闲) / 计价时段 / 官方余额),
+//   - 悬停:右侧展开玻璃拟态详情卡(运行时长=每轮实际工作时间之和,进行中的轮
+//     每秒跳动 / 输入未命中·缓存命中·输出 / 官方计价金额(按事件时间分层:
+//     基础价期|高峰|空闲) / 计价时段 / 官方余额),
 //     零间距 + 220ms 关闭缓冲,视口防溢出自动翻转到左侧并保持 12px 边距;
 //   - 卡底「门帘式」椭圆滑杆开关:深灰门帘从左向右拉满 = 详情常驻;
 //   - 窄栏(rail):¥ 圆形徽标,悬停同样展开详情卡(与宽栏同一套悬停/定位逻辑);
@@ -198,8 +199,12 @@ window.__ModuleLoader__.load({
 
       const t = zh ? TEXTS.zh : TEXTS.en
       const usage = (snap && snap.usage) ? snap.usage : null
-      const startedAt = (usage && typeof usage.startedAt === 'number') ? usage.startedAt : null
-      const runtimeMs = startedAt != null ? Math.max(0, now - startedAt) : null
+      const workMs = (usage && typeof usage.workMs === 'number') ? usage.workMs : null
+      const running = usage && usage.running === true
+      const snapNow = (snap && typeof snap.now === 'number') ? snap.now : null
+      const liveWorkMs = workMs != null && running && snapNow !== null
+        ? workMs + Math.max(0, now - snapNow)
+        : workMs
       const inTok = (usage && typeof usage.inputTokens === 'number') ? usage.inputTokens : 0
       const hitTok = (usage && typeof usage.cacheReadTokens === 'number') ? usage.cacheReadTokens : 0
       const outTok = (usage && typeof usage.outputTokens === 'number') ? usage.outputTokens : 0
@@ -210,8 +215,8 @@ window.__ModuleLoader__.load({
         : null
       const bal = (snap && snap.balance) ? snap.balance : null
 
-      const runtimeText = runtimeMs != null
-        ? formatRuntime(runtimeMs)
+      const runtimeText = workMs != null
+        ? formatRuntime(liveWorkMs)
         : (sessionId ? t.pending : t.noSession)
       const inMissText = (inTok > 0 || hitTok > 0 || outTok > 0) ? fmtTokens(inTok) : '—'
       const cacheHitText = (inTok > 0 || hitTok > 0 || outTok > 0) ? fmtTokens(hitTok) : '—'
