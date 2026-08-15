@@ -1,13 +1,15 @@
 // dsh-usage-balance — Client half(预构建 module-loader bundle,零构建)
 //
 // 注册到 sidebar.footer.action(设置按钮上方):
-//   - 宽栏:⏱ 仪表盘图标 +「用量 | 余额」主色 13px 标签行(与设置/Cordis 行同风格);
+//   - 宽栏:仪表盘图标 16px +「用量 | 余额」14px 标签行,34px 行高 /
+//     12px 圆角 / 8px 间距——与设置行(ui-settings-general trigger)同规格;
 //   - 悬停:右侧展开玻璃拟态详情卡(运行时长=每轮实际工作时间之和,进行中的轮
 //     每秒跳动 / 输入未命中·缓存命中·输出 / 官方计价金额(按事件时间分层:
 //     基础价期|高峰|空闲) / 计价时段 / 官方余额),
 //     零间距 + 220ms 关闭缓冲,视口防溢出自动翻转到左侧并保持 12px 边距;
 //   - 卡底「门帘式」椭圆滑杆开关:深灰门帘从左向右拉满 = 详情常驻;
-//   - 窄栏(rail):¥ 圆形徽标,悬停同样展开详情卡(与宽栏同一套悬停/定位逻辑);
+//   - 窄栏(rail):36×36 圆形按钮 + 同一仪表盘图标 18px(与设置 rail 同规格),
+//     悬停同样展开详情卡(与宽栏同一套悬停/定位逻辑);
 //   - 与 Cordis 面板共存:精确 :has() 规则把脚部动作区改为纵向堆叠。
 // 数据来自宿主半的 GET /dsh-usage-balance/state 路由,60 秒刷新;样式全部
 // 使用 --dsw-* 主题变量,跟随全局亮/暗主题;文案跟随界面中英文。
@@ -23,12 +25,12 @@ window.__ModuleLoader__.load({
     // ── 样式(经 style 标签注入,data 属性防重复) ─────────────────────────
     const TAG_ID = 'dsh-usage-balance/style'
     const CSS = [
-      '.ubar{position:relative;box-sizing:border-box;flex:none;width:100%;display:flex;align-items:center;gap:8px;height:32px;min-width:0;padding:0 8px;border-radius:8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;cursor:default;}',
+      '.ubar{position:relative;box-sizing:border-box;flex:none;width:calc(100% + 8px);display:flex;align-items:center;gap:8px;height:34px;min-width:0;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;cursor:default;}',
       '.ubar:hover{background:var(--dsw-alias-interactive-bg-hover);}',
       '.ubar-pinned{background:var(--dsw-alias-bg-layer-1);}',
       '.ubar-pinned:hover{background:var(--dsw-alias-interactive-bg-hover);}',
       '.ubar-icon{flex:none;color:var(--dsw-alias-label-primary);}',
-      '.ubar-label{flex:none;color:var(--dsw-alias-label-primary);font-weight:500;}',
+      '.ubar-label{flex:none;color:var(--dsw-alias-label-primary);}',
       '.ubar-sep{flex:none;color:var(--dsw-alias-separator-primary);}',
       '.ubar-pop{position:fixed;z-index:35;display:flex;flex-direction:column;gap:6px;min-width:224px;max-width:320px;width:max-content;padding:12px 14px;border-radius:12px;background:var(--dsw-alias-bg-overlay);background:color-mix(in srgb,var(--dsw-alias-bg-overlay) 82%,transparent);border:1px solid var(--dsw-alias-border-l1);border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 60%,transparent);backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);box-shadow:var(--dsw-shadow-lv3);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);opacity:0;transform:translateX(-8px);pointer-events:none;transition:opacity 140ms ease,transform 140ms ease;}',
       '.ubar-pop-open{opacity:1;transform:translateX(0);pointer-events:auto;}',
@@ -47,7 +49,7 @@ window.__ModuleLoader__.load({
       '.ubar-switch-on .ubar-switch-off-label{opacity:0;}',
       '.ubar-switch-on-label{left:0;right:0;justify-content:center;color:var(--dsw-alias-label-primary-inverted);opacity:0;}',
       '.ubar-switch-on .ubar-switch-on-label{opacity:1;}',
-      '.ubar-rail{width:100%;height:32px;justify-content:center;gap:0;padding:0;border-radius:8px;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;cursor:default;}',
+      '.ubar-rail{width:36px;height:36px;justify-content:center;gap:0;margin:0;padding:0;border-radius:50%;color:var(--dsw-alias-label-primary);cursor:default;}',
       '.ubar-rail:hover{background:var(--dsw-alias-interactive-bg-hover);}',
       'div:has(> .ubar),div:has(.ubar):has(+ div [aria-haspopup="dialog"]){flex-direction:column;}',
     ].join('\n')
@@ -316,26 +318,28 @@ window.__ModuleLoader__.load({
         },
       }, rows)
 
+      const iconNode = e('svg', {
+        className: 'ubar-icon',
+        viewBox: '0 0 24 24',
+        width: wide ? 16 : 18,
+        height: wide ? 16 : 18,
+        'aria-hidden': true,
+        fill: 'currentColor',
+      }, e('path', { d: SPEED_PATH }))
+
       if (!wide) {
         return e('div', Object.assign({
           className: 'ubar ubar-rail',
           title: (hovered || pinned) ? undefined : fullTitle,
         }, hoverHandlers),
-          (bal && bal.status === 'ok') ? currencySymbol(bal.currency) : '·',
+          iconNode,
           popNode)
       }
 
       return e('div', Object.assign({
         className: pinned ? 'ubar ubar-pinned' : 'ubar',
       }, hoverHandlers),
-        e('svg', {
-          className: 'ubar-icon',
-          viewBox: '0 0 24 24',
-          width: 14,
-          height: 14,
-          'aria-hidden': true,
-          fill: 'currentColor',
-        }, e('path', { d: SPEED_PATH })),
+        iconNode,
         e('span', { className: 'ubar-label' }, t.usage),
         e('span', { className: 'ubar-sep' }, '|'),
         e('span', { className: 'ubar-label' }, t.balance),
