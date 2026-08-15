@@ -3,11 +3,14 @@
 // 在侧边栏「用量/余额」标签行的背后提供 JSON 状态路由:
 //   GET /dsh-usage-balance/state?sessionId=<当前会话>
 // 返回:
-//   usage:   startedAt / inputTokens / outputTokens / cacheReadTokens / costCny / model
+//   usage:   startedAt / inputTokens / outputTokens / cacheReadTokens /
+//            costCny / costBreakdown(基础价期|高峰|空闲) / currentTier / model
 //   balance: status(ok|unavailable|error) / currency / totalBalance / grantedBalance / toppedUpBalance / message
 //
-// 用量口径:tokenUsage 会话投影(与内置统计同源);金额按内置价格表估算(≈,可在本文件
-// 顶部调整);余额调用官方 GET {baseURL}/user/balance,复用 llm-deepseek 配置的同一把 key。
+// 金额计价:按官方定价表 + 事件时间戳精确分层计费(见 PRICE 区注释),
+// 增量扫描会话事件日志,O(新增事件),不重算历史。
+// 用量口径:tokenUsage 会话投影(与内置统计同源);余额调用官方
+// GET {baseURL}/user/balance,复用 llm-deepseek 配置的同一把 key。
 //
 // 重要:所有服务一律在请求时经 ctx.get 惰性获取,绝不在 apply 时捕获——bundle 行的
 // apply 可能早于 credentials/settings 等服务的注册(启动时序),闭包捕获会把
@@ -17,15 +20,63 @@ export const name = 'usage-balance'
 
 export const inject = ['webServer']
 
-// 价格表:每百万 token 的人民币单价(近似值;如与实际不符请修改这里)
+// ── 官方价格表(元/百万 tokens)────────────────────────────────────────
+// 来源:https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+// 旧价:2026-08-17 00:00(北京时间)之前生效。
+// 新价:该时刻起采用峰谷定价——高峰时段为北京时间 9:00-12:00、14:00-18:00,
+//       空闲时段价格 = 高峰的一半;其余时间为空闲时段。
+const PRICE_SWITCH_MS = Date.UTC(2026, 7, 16, 16) // 2026-08-17T00:00 北京时间 = 前一日 16:00 UTC
 const PRICE_TABLE = {
-  'deepseek-v4-flash': { input: 2, cacheRead: 0.5, output: 8 },
-  'deepseek-v4-pro': { input: 4, cacheRead: 1, output: 16 },
-  'deepseek-chat': { input: 2, cacheRead: 0.5, output: 8 },
-  'deepseek-reasoner': { input: 4, cacheRead: 1, output: 16 },
+  legacy: {
+    'deepseek-v4-flash': { hit: 0.02, miss: 1, output: 2 },
+    'deepseek-v4-pro': { hit: 0.025, miss: 3, output: 6 },
+  },
+  offpeak: {
+    'deepseek-v4-flash': { hit: 0.05, miss: 1.5, output: 4.5 },
+    'deepseek-v4-pro': { hit: 0.15, miss: 4.5, output: 13.5 },
+  },
+  peak: {
+    'deepseek-v4-flash': { hit: 0.1, miss: 3.0, output: 9.0 },
+    'deepseek-v4-pro': { hit: 0.3, miss: 9.0, output: 27.0 },
+  },
 }
-const FALLBACK_PRICE = { input: 3, cacheRead: 0.75, output: 12 }
+const FALLBACK_MODEL = 'deepseek-v4-pro'
 const BALANCE_CACHE_MS = 60000
+
+function beijingHour(ms) {
+  // UTC+8 的小时数(0-23)
+  return new Date(ms + 8 * 3600000).getUTCHours()
+}
+
+function priceTierAt(ms) {
+  if (ms < PRICE_SWITCH_MS) return 'legacy'
+  const h = beijingHour(ms)
+  return (h >= 9 && h < 12) || (h >= 14 && h < 18) ? 'peak' : 'offpeak'
+}
+
+function priceFor(model, tier) {
+  const table = PRICE_TABLE[tier] || PRICE_TABLE.legacy
+  return table[model] || table[FALLBACK_MODEL]
+}
+
+// 事件时间的当前计价层(供客户端「计价时段」行展示;价格切换前恒为 legacy)
+function currentTier() {
+  return priceTierAt(Date.now())
+}
+
+// ── 会话级增量计价缓存 ────────────────────────────────────────────────
+// sessionId -> { lastSeq, model, last, buckets, cost }
+// 事件日志 append-only 且 seq 连续;每次请求只处理 lastSeq 之后的新事件。
+// 冷启动(或日志 seq 不连续)时从 0 全量重扫一次,毫秒级。
+const billing = new Map()
+
+function emptyBuckets() {
+  return {
+    legacy: { miss: 0, hit: 0, out: 0, amount: 0 },
+    peak: { miss: 0, hit: 0, out: 0, amount: 0 },
+    offpeak: { miss: 0, hit: 0, out: 0, amount: 0 },
+  }
+}
 
 function detectModel(events) {
   if (!events) return null
@@ -39,13 +90,76 @@ function detectModel(events) {
   return null
 }
 
-function estimateCost(usage, model) {
-  if (!usage) return null
-  const p = (model && PRICE_TABLE[model]) || FALLBACK_PRICE
-  const input = (usage.uncachedInputTokens || 0) + (usage.cacheWriteTokens || 0)
-  const cacheRead = usage.cacheReadTokens || 0
-  const output = usage.outputTokens || 0
-  return (input * p.input + cacheRead * p.cacheRead + output * p.output) / 1000000
+// 增量扫描一个会话的事件日志,维护分层 token 桶与精确金额。
+// usage 事件去重规则与内置 token-meter 投影一致:同一 turn/step 的后到
+// 样本替换先到样本(usage chunk 之后跟 message 的完整 usage)。
+function sweepBilling(session, now) {
+  const events = session.events
+  const id = session.id
+  let b = billing.get(id)
+  if (b === undefined) {
+    b = { lastSeq: 0, model: null, last: null, buckets: emptyBuckets(), cost: 0 }
+    billing.set(id, b)
+  }
+  const total = Array.isArray(events) ? events.length : 0
+  // 已处理 seq 越过当前日志长度(异常)或首个新事件 seq 不连续 → 全量重扫
+  if (b.lastSeq > total || (b.lastSeq > 0 && b.lastSeq <= total
+    && (!events[b.lastSeq - 1] || events[b.lastSeq - 1].seq !== b.lastSeq))) {
+    b = { lastSeq: 0, model: null, last: null, buckets: emptyBuckets(), cost: 0 }
+    billing.set(id, b)
+  }
+  if (total === 0) return b
+
+  for (let i = b.lastSeq; i < total; i++) {
+    const ev = events[i]
+    if (!ev || typeof ev !== 'object') continue
+    if (ev.type === 'request/header' && ev.data && ev.data.header && ev.data.header.config) {
+      const m = ev.data.header.config.model
+      if (typeof m === 'string' && m.length > 0) b.model = m
+      continue
+    }
+    let usage = null
+    let turn = null
+    let step = null
+    if (ev.type === 'assistant/chunk' && ev.data && ev.data.chunk && ev.data.chunk.type === 'usage') {
+      usage = ev.data.chunk.usage
+      turn = ev.data.turn
+      step = ev.data.step
+    } else if (ev.type === 'assistant/message' && ev.data && ev.data.usage !== undefined) {
+      usage = ev.data.usage
+      turn = ev.data.turn
+      step = ev.data.step
+    }
+    if (usage === null || usage === undefined) continue
+
+    const time = typeof ev.time === 'number' ? ev.time : now
+    const tier = priceTierAt(time)
+    const p = priceFor(b.model, tier)
+    const miss = (usage.inputTokens || 0) + (usage.cacheWriteTokens || 0)
+    const hit = usage.cacheReadTokens || 0
+    const out = usage.outputTokens || 0
+    const amount = (miss * p.miss + hit * p.hit + out * p.output) / 1000000
+
+    // 同 turn/step 后到替换先到(与 token-meter 投影的 last-wins 一致)
+    if (b.last !== null && b.last.turn === turn && b.last.step === step) {
+      const prev = b.last
+      const pb = b.buckets[prev.tier]
+      pb.miss -= prev.miss
+      pb.hit -= prev.hit
+      pb.out -= prev.out
+      pb.amount -= prev.amount
+      b.cost -= prev.amount
+    }
+    const bucket = b.buckets[tier]
+    bucket.miss += miss
+    bucket.hit += hit
+    bucket.out += out
+    bucket.amount += amount
+    b.cost += amount
+    b.last = { turn, step, tier, miss, hit, out, amount }
+  }
+  b.lastSeq = total
+  return b
 }
 
 // 去掉尾部斜杠与 /v1 之类版本路径,再拼 /user/balance(参考 dsh-cost-meter)
@@ -187,6 +301,8 @@ export function apply(ctx) {
       outputTokens: 0,
       cacheReadTokens: 0,
       costCny: null,
+      costBreakdown: { legacy: 0, peak: 0, offpeak: 0 },
+      currentTier: currentTier(),
       model: null,
     }
     if (session === undefined) return out
@@ -194,6 +310,9 @@ export function apply(ctx) {
       ? session.header.createdAt
       : null
     if (created !== null) out.startedAt = created
+    const now = Date.now()
+
+    // 投影四桶(与内置统计同源,供 UI Token 行展示)
     const projections = ctx.get('sessionProjections') // 惰性获取
     if (projections !== undefined) {
       try {
@@ -203,12 +322,23 @@ export function apply(ctx) {
           out.inputTokens = (usage.uncachedInputTokens || 0) + (usage.cacheWriteTokens || 0)
           out.outputTokens = usage.outputTokens || 0
           out.cacheReadTokens = usage.cacheReadTokens || 0
-          const model = detectModel(session.events)
-          if (model !== null) out.model = model
-          out.costCny = estimateCost(usage, model)
         }
       } catch { /* 投影读取失败时保持 0 */ }
     }
+
+    // 精确金额:增量扫描事件日志,按事件时间分层计价
+    try {
+      const b = sweepBilling(session, now)
+      const model = b.model !== null ? b.model : detectModel(session.events)
+      if (model !== null) out.model = model
+      out.costCny = b.cost
+      out.costBreakdown = {
+        legacy: b.buckets.legacy.amount,
+        peak: b.buckets.peak.amount,
+        offpeak: b.buckets.offpeak.amount,
+      }
+    } catch { /* 计价失败时金额保持 null */ }
+
     return out
   }
 

@@ -2,7 +2,8 @@
 //
 // 注册到 sidebar.footer.action(设置按钮上方):
 //   - 宽栏:⏱ 仪表盘图标 +「用量 | 余额」主色 13px 标签行(与设置/Cordis 行同风格);
-//   - 悬停:右侧展开玻璃拟态详情卡(运行时长每秒跳动 / Token / 估算金额 / 官方余额),
+//   - 悬停:右侧展开玻璃拟态详情卡(运行时长每秒跳动 / 输入未命中·缓存命中·输出 /
+//     官方计价金额(按事件时间分层:基础价期|高峰|空闲) / 计价时段 / 官方余额),
 //     零间距 + 220ms 关闭缓冲,视口防溢出自动翻转到左侧并保持 12px 边距;
 //   - 卡底「门帘式」椭圆滑杆开关:深灰门帘从左向右拉满 = 详情常驻;
 //   - 窄栏(rail):¥ 圆形徽标,悬停系统提示看详情;
@@ -99,13 +100,15 @@ window.__ModuleLoader__.load({
     // ── 文案(zh/en) ──────────────────────────────────────────────────────
     const TEXTS = {
       zh: {
-        usage: '用量', balance: '余额', runtime: '运行时长', tokens: 'Token', cost: '金额',
+        usage: '用量', balance: '余额', runtime: '运行时长', inMiss: '输入·未命中', cacheHit: '缓存命中',
+        outTok: '输出', cost: '金额', tier: '计价时段', tierLegacy: '基础价', tierPeak: '高峰', tierOffpeak: '空闲',
         noSession: '无对话', pending: '…', noKey: '未配置 key', na: '不可用', fail: '获取失败',
         pinOn: '点击后始终显示详情', pinOff: '点击后仅悬停显示详情',
         modeHover: '悬停', modePinned: '固定',
       },
       en: {
-        usage: 'Usage', balance: 'Balance', runtime: 'Runtime', tokens: 'Tokens', cost: 'Cost',
+        usage: 'Usage', balance: 'Balance', runtime: 'Runtime', inMiss: 'Input (miss)', cacheHit: 'Cache hit',
+        outTok: 'Output', cost: 'Cost', tier: 'Billing tier', tierLegacy: 'Base', tierPeak: 'Peak', tierOffpeak: 'Off-peak',
         noSession: 'No session', pending: '…', noKey: 'No key', na: 'N/A', fail: 'Failed',
         pinOn: 'Click to always show details', pinOff: 'Click to show details on hover only',
         modeHover: 'Hover', modePinned: 'Pinned',
@@ -148,7 +151,7 @@ window.__ModuleLoader__.load({
       const measureFly = (rect) => {
         const margin = 12
         const estW = 264
-        const estH = 172
+        const estH = 264
         const vw = (typeof window !== 'undefined' && window.innerWidth > 0) ? window.innerWidth : 1280
         const vh = (typeof window !== 'undefined' && window.innerHeight > 0) ? window.innerHeight : 800
         let left = rect.right
@@ -198,22 +201,46 @@ window.__ModuleLoader__.load({
       const startedAt = (usage && typeof usage.startedAt === 'number') ? usage.startedAt : null
       const runtimeMs = startedAt != null ? Math.max(0, now - startedAt) : null
       const inTok = (usage && typeof usage.inputTokens === 'number') ? usage.inputTokens : 0
+      const hitTok = (usage && typeof usage.cacheReadTokens === 'number') ? usage.cacheReadTokens : 0
       const outTok = (usage && typeof usage.outputTokens === 'number') ? usage.outputTokens : 0
       const cost = (usage && typeof usage.costCny === 'number') ? usage.costCny : null
+      const tier = (usage && typeof usage.currentTier === 'string') ? usage.currentTier : null
+      const breakdown = (usage && usage.costBreakdown && typeof usage.costBreakdown === 'object')
+        ? usage.costBreakdown
+        : null
       const bal = (snap && snap.balance) ? snap.balance : null
 
       const runtimeText = runtimeMs != null
         ? formatRuntime(runtimeMs)
         : (sessionId ? t.pending : t.noSession)
-      const tokensText = (inTok > 0 || outTok > 0)
-        ? fmtTokens(inTok) + '/' + fmtTokens(outTok)
-        : '—'
+      const inMissText = (inTok > 0 || hitTok > 0 || outTok > 0) ? fmtTokens(inTok) : '—'
+      const cacheHitText = (inTok > 0 || hitTok > 0 || outTok > 0) ? fmtTokens(hitTok) : '—'
+      const outTokText = (inTok > 0 || hitTok > 0 || outTok > 0) ? fmtTokens(outTok) : '—'
       const costText = cost != null
         ? '≈¥' + (cost < 1 ? cost.toFixed(3) : cost.toFixed(2))
         : '—'
+      let costTitle = null
+      if (breakdown !== null) {
+        const parts = []
+        if (typeof breakdown.legacy === 'number' && breakdown.legacy > 0) {
+          parts.push(t.tierLegacy + ' ≈¥' + breakdown.legacy.toFixed(2))
+        }
+        if (typeof breakdown.peak === 'number' && breakdown.peak > 0) {
+          parts.push(t.tierPeak + ' ≈¥' + breakdown.peak.toFixed(2))
+        }
+        if (typeof breakdown.offpeak === 'number' && breakdown.offpeak > 0) {
+          parts.push(t.tierOffpeak + ' ≈¥' + breakdown.offpeak.toFixed(2))
+        }
+        if (parts.length > 0) costTitle = parts.join(' · ')
+      }
+      const tierText = tier === 'legacy' ? t.tierLegacy
+        : tier === 'peak' ? t.tierPeak
+        : tier === 'offpeak' ? t.tierOffpeak
+        : '—'
       const balText = balanceLabel(bal, t)
       const balError = (bal && bal.status === 'error' && bal.message) ? String(bal.message) : null
-      const fullTitle = t.usage + ' ' + t.runtime + ' ' + runtimeText + ' · ' + t.tokens + ' ' + tokensText
+      const fullTitle = t.usage + ' ' + t.runtime + ' ' + runtimeText + ' · ' + t.inMiss + ' ' + inMissText
+        + ' · ' + t.cacheHit + ' ' + cacheHitText + ' · ' + t.outTok + ' ' + outTokText
         + ' · ' + t.cost + ' ' + costText + ' | ' + t.balance + ' ' + balText
 
       if (!wide) {
@@ -227,12 +254,21 @@ window.__ModuleLoader__.load({
       rows.push(e('div', { className: 'ubar-pop-row', key: 'runtime' },
         e('span', { className: 'ubar-pop-k' }, t.runtime),
         e('span', { className: 'ubar-pop-v' }, runtimeText)))
-      rows.push(e('div', { className: 'ubar-pop-row', key: 'tokens' },
-        e('span', { className: 'ubar-pop-k' }, t.tokens),
-        e('span', { className: 'ubar-pop-v' }, tokensText)))
+      rows.push(e('div', { className: 'ubar-pop-row', key: 'inMiss' },
+        e('span', { className: 'ubar-pop-k' }, t.inMiss),
+        e('span', { className: 'ubar-pop-v' }, inMissText)))
+      rows.push(e('div', { className: 'ubar-pop-row', key: 'cacheHit' },
+        e('span', { className: 'ubar-pop-k' }, t.cacheHit),
+        e('span', { className: 'ubar-pop-v' }, cacheHitText)))
+      rows.push(e('div', { className: 'ubar-pop-row', key: 'outTok' },
+        e('span', { className: 'ubar-pop-k' }, t.outTok),
+        e('span', { className: 'ubar-pop-v' }, outTokText)))
       rows.push(e('div', { className: 'ubar-pop-row', key: 'cost' },
         e('span', { className: 'ubar-pop-k' }, t.cost),
-        e('span', { className: 'ubar-pop-v' }, costText)))
+        e('span', { className: 'ubar-pop-v', title: costTitle !== null ? costTitle : undefined }, costText)))
+      rows.push(e('div', { className: 'ubar-pop-row', key: 'tier' },
+        e('span', { className: 'ubar-pop-k' }, t.tier),
+        e('span', { className: 'ubar-pop-v' }, tierText)))
       rows.push(e('div', { className: 'ubar-pop-row', key: 'balance' },
         e('span', { className: 'ubar-pop-k' }, t.balance),
         e('span', {
