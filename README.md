@@ -44,6 +44,10 @@ dsh plugin --profile web remove dsh-usage-balance   # 卸载
 - 金额为估算值，实际账单以官方为准
 - 余额查询需要可访问 `api.deepseek.com` 的网络与有效 API Key
 
+## 📖 文字开源描述
+
+本插件在「文字开源」枢纽仓库 [dsh-text-open-source](https://github.com/zdjmrq/dsh-text-open-source) 中配有完整描述（功能 / 技术路线 / 结构 / 关键实现 / 复刻提示词，不依赖代码即可复刻、便于理解与微调）：[plugins/dsh-usage-balance.md](https://github.com/zdjmrq/dsh-text-open-source/blob/main/plugins/dsh-usage-balance.md)。
+
 ## License
 
 [MIT](LICENSE)
